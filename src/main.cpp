@@ -13,6 +13,7 @@ int main() {
   while(input != "exit"){
     std::cout << "$ ";
     std::getline(std::cin, input);
+    if(input == "exit 0") return 0; //implement exit builtin
     std::cerr << input << ": command not found" << std::endl;
   }
   return 0;
