@@ -36,7 +36,7 @@ std::string get_path(std::string command){
     string abs_path = path + '/' + command;
 
     if(filesystem::exists(abs_path)){
-      return abs_path
+      return abs_path;
     }
   }
   return "";
@@ -70,7 +70,7 @@ int main() {
       if(isValid(input) != invalid){
         std::cout << input << " is a shell builtin\n";
       }else{
-        std::stirng path = get_path(input);
+        std::string path = get_path(input);
 
         if(path.empty()){
           std::cout << input << " not found\n";
