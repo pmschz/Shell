@@ -2,24 +2,39 @@
 #include <string>
 
 int main() {
-  // Flush after every std::cout / std:cerr
+  bool exit = 0;
+  while(!exit){
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
 
-  // Uncomment this block to pass the first stage
-
   std::cout << "$ ";
+  bool checkValid = 0;
   std::string input;
+  std::getline(std::cin, input);
 
-  while(std::getline(std::cin, input) && input.find("exit") != 0){
-      if(input.find("echo ") == 0){
-        const int ECHO_LEN = 5;
-        std::string text = input.substr(ECHO_LEN);
-        std::cout << text << std::endl;
-      }else{
-        std::cout << input << ": command not found" << std::endl;
-      }
-      std::cout<< "$ ";
+  if(input == "exit 0"){
+    checkValid = 1;
+    exit = 1;
+  }
+
+  if(input.substr(0,5) == "type "){
+    checkValid = 1;
+    std::string cmd = input.substr(5);
+    if(cmd.substr(0,4) == "type" || cmd.substr(0,4)=="exit" || cmd.substr(0,4) == "echo"){
+      std::cout << cmd << " is a shell builtin\n";
+    }else{
+      std::cout << " not found\n";
     }
-  exit(0);
+  }
+
+  if(input.substr(0,5) == "echo "){
+    checkValid = 1;
+    std::string toPrint = input.substr(5);
+    std::cout << toPrint << "\n";
+  }
+  if(checkValid == 0){
+    std::cout<< input << ": command not found\n";
+  }
+}
+  return 0;
 }
