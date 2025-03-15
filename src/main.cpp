@@ -8,13 +8,18 @@ int main() {
 
   // Uncomment this block to pass the first stage
 
+  std::cout << "$ ";
   std::string input;
 
-  while(input != "exit"){
-    std::cout << "$ ";
-    std::getline(std::cin, input);
-    if(input == "exit 0") return 0; //implement exit builtin
-    std::cerr << input << ": command not found" << std::endl;
-  }
-  return 0;
+  while(std::getline(std::cin, input) && input.find("exit") != 0){
+      if(input.find("echo ") == 0){
+        const int ECHO_LEN = 5;
+        std::string text = input.substr(ECHO_LEN);
+        std::cout << text << std::endl;
+      }else{
+        std::cout << input << ": command not found" << std::endl;
+      }
+      std::cout<< "$ ";
+    }
+  exit(0);
 }
