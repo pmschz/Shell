@@ -1,331 +1,450 @@
 #include <iostream>
-#include <fstream>
-#include <vector>
+#include <set>
+#include <string>
 #include <filesystem>
-std::vector<std::string> split(std::string& input, const std::string& delimiter) {
-    std::vector<std::string> tokens;
-    size_t pos = 0;
-    std::string token;
-    while((pos = input.find(delimiter)) != std::string::npos)
+#include <fstream>
+#include <cstdlib>
+#include <vector>
+using namespace std;
+
+string get_path(string command, bool cQ = false, string Quote = "")
+{
+  char *path = getenv("PATH");
+  string p = string(path);
+  string pth = "";
+  set<string> pathes;
+  for (int i = 0; i < p.size(); i++)
+  {
+    if (p[i] == ':')
     {
-        token = input.substr(0, pos);
-        tokens.push_back(token);
-        input.erase(0, pos + delimiter.length());
+      pathes.insert(pth);
+      pth = "";
     }
-    token = input.substr(0, input.size());
-    tokens.push_back(token);
-    return tokens;
-}
-bool isEscapeableInQuotes(char inputChar) {
-    return (inputChar == '\\' || inputChar == '$' || inputChar == '"' || inputChar == '\n');
-}
-std::vector<std::string> createInputTokens(std::string& input) {
-    std::vector<std::string> tokens;
-    std::string token;
-    bool inSingleQuotes = false;
-    bool inDoubleQuotes = false;
-    bool escapeNext = false;
-    bool tokensArePaths = false;
-    for (size_t i = 0; i < input.size(); i++) {
-        char currentChar = input[i];
-        if (escapeNext){
-            token.push_back(currentChar);
-            escapeNext = false;
-            continue;
-        }
-        if (currentChar == '\'') {
-            if (inDoubleQuotes) {
-                token.push_back(currentChar);
-            }
-            else {
-                inSingleQuotes = !inSingleQuotes;
-            }
-        }
-        else if (currentChar == '\"') {
-            if (inSingleQuotes) {
-                token.push_back(currentChar);
-            }
-            if (tokensArePaths && (i == 0 || (i != input.size() - 1 && input[i - 1] == '"'))) {
-                // Do not create quotes logic in paths from the wrapping quotes
-                continue;
-            }
-            inDoubleQuotes = !inDoubleQuotes;
-        }
-        else if (currentChar == ' ') {
-            if (inSingleQuotes || inDoubleQuotes) {
-                token.push_back(currentChar);
-            }
-            else {
-                if (!token.empty()) {
-                    if (tokens.empty()) {
-                        if (token == "cat") {
-                            tokensArePaths = true;
-                        }
-                    }
-                    tokens.push_back(token);
-                    if (tokens.size() > 1) {}
-                    token = "";
-                }
-            }
-        }
-        else if (currentChar == '\\'){
-            // Handle non quoted escape character, ignore it
-            if (!inDoubleQuotes && !inSingleQuotes){
-                escapeNext = true;
-                continue;
-            }
-            if (inDoubleQuotes){
-                if (i < input.size() - 1 && isEscapeableInQuotes(input[i + 1])) {
-                    escapeNext = true;
-                    continue;
-                }
-                else if (!tokensArePaths) {
-                    token.push_back(currentChar);
-                    token.push_back(currentChar);
-                }
-                else if (tokensArePaths) {
-                    token.push_back(currentChar);
-                }
-            }
-            else if (inSingleQuotes){
-                token.push_back(currentChar);
-                escapeNext = true;
-                continue;
-            }
-        }
-        else {
-            token.push_back(currentChar);
-        }
-        escapeNext = false;
-    }
-    tokens.push_back(token);
-    return tokens;
-}
-bool isExecutable(const std::filesystem::path& path)
-{
-    if (std::filesystem::is_regular_file(path)) {
-        auto permissions = std::filesystem::status(path).permissions();
-        return (permissions & std::filesystem::perms::owner_exec) != std::filesystem::perms::none ||
-            (permissions & std::filesystem::perms::group_exec) != std::filesystem::perms::none ||
-            (permissions & std::filesystem::perms::others_exec) != std::filesystem::perms::none;
-    }
-    return false;
-}
-bool isCustomExecutable(const std::filesystem::path& path)
-{
-    auto permissions = std::filesystem::status(path).permissions();
-    return (permissions & std::filesystem::perms::owner_exec) != std::filesystem::perms::none ||
-        (permissions & std::filesystem::perms::group_exec) != std::filesystem::perms::none ||
-        (permissions & std::filesystem::perms::others_exec) != std::filesystem::perms::none;
-}
-void handleEcho(const std::vector<std::string> tokens){
-    std::string output = "";
-    bool writeToFile = false;
-    bool writeToStdOut = true;
-    std::string fileName;
-    for (size_t i = 1; i < tokens.size(); ++i) {
-        if (tokens[i] == ">" || tokens[i] == "1>") {
-            fileName = tokens[i + 1]; // boundary?
-            writeToFile = true;
-            writeToStdOut = false;
-            break;
-        }
-        output += tokens[i] + " ";
-    }
-    if (writeToStdOut) {
-        std::cout << output << std::endl;
-    }
-    if (writeToFile) {
-        std::ofstream outputFile(fileName);
-        if (outputFile.is_open()) {
-            outputFile << output << std::endl;
-            outputFile.close();
-        }
-    }
-}
-std::vector<std::string> getAllPathsFromEnvironment(){
-    char const* path = std::getenv("PATH");
-    if (path != NULL){
-        std::string pathAsString = path;
-        return split(pathAsString, ":");
-    }
-    std::vector<std::string> empty;
-    return empty;
-}
-void handleType(const std::vector<std::string> tokens){
-    if (tokens[1] == "echo" ||
-        tokens[1] == "type" ||
-        tokens[1] == "pwd" ||
-        tokens[1] == "exit")
+    else
+      pth += p[i];
+  }
+  pathes.insert(pth);
+  for (string cmd : pathes)
+  {
+    string file = cmd + "/" + command;
+    if (filesystem::exists(file))
     {
-        std::cout << tokens[1] << " is a shell builtin" << std::endl;
+      string resolved_path = filesystem::canonical(file).string();
+      if (cQ)
+        return cmd + "/" + Quote + command + Quote;
+      else
+        return resolved_path;
     }
-    else {
-        std::vector<std::string> allPathsFromEnvironment =
-                getAllPathsFromEnvironment();
-        if (allPathsFromEnvironment.empty()){
-            std::cout << tokens[1] << ": not found" << std::endl;
-        }
-        bool found = false;
-        for(auto path : allPathsFromEnvironment){
-            std::string fullPath = path + "/" + tokens[1];
-            if (std::filesystem::exists(fullPath)){
-                found = true;
-                std::cout << tokens[1] << " is " << fullPath << std::endl;
-                break;
-            }
-        }
-        if (!found){
-            std::cout << tokens[1] << ": not found" << std::endl;
-        }
-    }
+  }
+  return "";
 }
-bool handleExecutable(std::vector<std::string> tokens)
+string get_basename(const string &path)
 {
-    std::vector<std::string> allPathsFromEnvironment =
-                getAllPathsFromEnvironment();
-    bool isCustomExecutable = false;
-    std::string firstToken = tokens[0];
-    if (tokens[0].find('\'') != std::string::npos) {
-        firstToken = '\"' + tokens[0] + "\" ";
-        isCustomExecutable = true;
+  return filesystem::path(path).filename().string();
+}
+bool is_exe(string command)
+{
+  string path = get_path(command);
+  if (filesystem::exists(path))
+  {
+    auto perms = filesystem::status(path).permissions();
+    return (perms & filesystem::perms::owner_exec) != filesystem::perms::none ||
+           (perms & filesystem::perms::group_exec) != filesystem::perms::none ||
+           (perms & filesystem::perms::others_exec) != filesystem::perms::none;
+  }
+  return false;
+}
+int containQuotes(string arg)
+{
+  // cout<<arg<<endl;
+  // cout << arg[arg.size() - 1] << endl;
+  if ((arg[0] == '\'' && arg[arg.size() - 1] == '\''))
+    return 1;
+  else if ((arg[0] == '\"' && arg[arg.size() - 1] == '\"'))
+    return 2;
+  else
+    return 0;
+}
+vector<string> splitArgs(string arg, char del = '\'')
+{
+  string part = "";
+  vector<string> results;
+  int Qcount = 0;
+  for (int i = 0; i < arg.size(); i++)
+  {
+    if (part == " " && arg[i] == ' ' && part.size() == 1)
+    {
+      continue;
     }
-    else if (tokens[0].find(' ') != std::string::npos){
-        firstToken = '\'' + tokens[0] + "' ";
-        isCustomExecutable = true;
+    if (arg[i] == del && (arg[i + 1] == ' ' || arg[i + 1] == del) || part == " ")
+    {
+      results.push_back(part);
+      part = "";
     }
-    for(auto path : allPathsFromEnvironment){
-        std::string fullPath = path + "/" + firstToken;
-        if (isExecutable(fullPath) || isCustomExecutable){
-            std::string command = "";
-            for(size_t i = 1; i < tokens.size(); ++i)
+    if (arg[i] == del)
+    {
+      continue;
+    }
+    if (arg[i] == '\\' and del == '\"')
+    {
+      if (i + 1 < arg.size() && (arg[i + 1] == '$' || arg[i + 1] == '"' || arg[i + 1] == '\\'))
+      {
+        part += arg[i + 1];
+        i++;
+      }
+      else
+      {
+        part += '\\';
+      }
+    }
+    else
+    {
+      part += arg[i];
+    }
+  }
+  results.push_back(part);
+  return results;
+}
+vector<string> getCommand(string input)
+{
+  vector<string> tokens(2);
+  string command = "";
+  int i = 1;
+  char Quote = input[0];
+  while (input[i] != Quote)
+  {
+    command += input[i];
+    i++;
+  }
+  // cout << "command : " << command << endl;
+  tokens[0] = command;
+  i++;
+  command = "";
+  while (i < input.size())
+  {
+    command += input[i];
+    i++;
+  }
+  // cout << "args : " << command << endl;
+  tokens[1] = command;
+  return tokens;
+}
+vector<string> splitForSpaces(string args)
+{
+  vector<string> results;
+  string part = "";
+  for (int i = 0; i < args.size(); i++)
+  {
+    if (args[i] != ' ')
+      part += args[i];
+    else
+    {
+      results.push_back(part);
+      part = "";
+    }
+  }
+  results.push_back(part);
+  return results;
+}
+int main()
+{
+  cout << unitbuf;
+  cerr << unitbuf;
+  // for (auto it = pathes.begin(); it != pathes.end(); it++)
+  //   cout << *it << endl;
+  set<string> commands = {"echo", "exit", "type", "pwd", "cd"};
+  string input;
+  while (true)
+  {
+    cout << "$ ";
+    getline(std::cin, input);
+    if (input == "exit 0")
+      break;
+    bool cQ = (input[0] == '\'' || input[0] == '\"');
+    // dashOne = input.find("-1") != string::npos;
+    vector<string> tokens = cQ ? getCommand(input) : vector<string>();
+    string command = cQ ? tokens[0] : input.substr(0, input.find(" "));
+    string arguments = cQ ? tokens[1] : input.substr(input.find(" ") + 1);
+    string outPutFile;
+    bool inFile = false;
+    size_t redirPos = arguments.find(">");
+    bool stderr_2 = arguments[redirPos - 1] == '2';
+    bool append = arguments[redirPos + 1] == '>';
+    // cout << append << endl;
+    if (redirPos != string::npos)
+    {
+      outPutFile = append ? arguments.substr(redirPos + 2) : arguments.substr(redirPos + 1);
+      size_t firstChar = outPutFile.find_first_not_of(" ");
+      size_t lastChar = outPutFile.find_last_not_of(" ");
+      outPutFile = outPutFile.substr(firstChar, lastChar - firstChar + 1);
+      if (arguments[redirPos - 1] == '1' || arguments[redirPos - 1] == '2')
+        arguments = arguments.substr(0, redirPos - 2);
+      else
+        arguments = arguments.substr(0, redirPos - 1);
+      inFile = true;
+    }
+    // cout << arguments << endl;
+    bool isCommand = true;
+    if (command == "echo")
+    {
+      int containQ = containQuotes(arguments);
+      // cout << containQ << endl;
+      string output = "";
+      if (containQ)
+      {
+        vector<string> args = containQ == 2 ? splitArgs(arguments, '\"') : splitArgs(arguments);
+        for (auto &arg : args)
+        {
+          // cout<<arg<<endl;
+          ofstream out(outPutFile, append ? ios::app : ios::out);
+          for (int i = 0; i < arg.size(); i++)
+          {
+            output += arg[i];
+          }
+          if (inFile && stderr_2 == false)
+          {
+            out << output << endl;
+            out.close();
+          }
+          else if (stderr_2)
+          {
+            try
             {
-                if (tokens[i] == ">" || tokens[i] == "1>") {
-                    command += tokens[i] + " ";
-                }
-                else if (tokens[i].find('\'') != std::string::npos) {
-                    command += '\"' + tokens[i] + "\" ";
-                }
-                else {
-                    command += '\'' + tokens[i] + "' ";
-                }
+              cout << output << endl;
             }
-            if (tokens[0] == "cat") {
-                fullPath = "cat";
+            catch (const std::exception &e)
+            {
+              out << e.what();
+              // out.close();
             }
-            std::string fullCommandStr = fullPath + " " + command;
-            const char* fullCommand = fullCommandStr.c_str();
-            system(fullCommand);
-            return true;
+          }
+          else
+            cout << output;
+          output = "";
         }
+        if (!inFile)
+          cout << endl;
+      }
+      else
+      {
+        bool space = false;
+        for (int i = 0; i < arguments.size(); i++)
+        {
+          // if (i != arguments.size() - 1 && arguments[i] == '\\')
+          //   output += arguments[i + 1];
+          if (i > 0 && arguments[i] == '\\' && arguments[i - 1] == '\\')
+            output += arguments[i];
+          if (arguments[i] != ' ' && arguments[i] != '\\')
+            output += arguments[i];
+          if (arguments[i] != ' ' && arguments[i + 1] == ' ')
+          {
+            // output += arguments[i];
+            output += " ";
+          }
+        }
+        //  \'\"example world\"\'
+        //  '"example world "'
+        if (inFile)
+        {
+          ofstream out(outPutFile, append ? ios::app : ios::out);
+          out << output << endl;
+          // out.close();
+        }
+        else
+          cout << output << endl;
+        // cout << arguments << endl;
+      }
     }
-    return false;
-}
-bool isAbsolutePath(std::string token) {
-    return token.length() > 1 && token[0] == '/';
-}
-bool isRelativePathChild(std::string token) {
-    return token.length() > 2 && token[0] == '.' && token[1] == '/';
-}
-bool isRelativePathParent(std::string token) {
-    return token.length() > 2 && token[0] == '.' && token[1] == '.' && token[2] == '/';
-}
-bool isHomeDirectory(std::string token) {
-    return token.length() > 0 && token[0] == '~';
-}
-std::string goUpNDirectories(std::string currentDirectory, size_t count) {
-    std::vector<std::string> allPathSegmentsFromCurrentDirectory = split(currentDirectory, "/");
-    std::string newDirectory;
-    for(size_t i = 1; i < allPathSegmentsFromCurrentDirectory.size() - count; i++) {
-        newDirectory += "/" + allPathSegmentsFromCurrentDirectory[i];
+    else if (command == "type")
+    {
+      if (commands.find(arguments) != commands.end())
+      {
+        cout << arguments << " is a shell builtin\n";
+        isCommand = false;
+      }
+      else
+      {
+        string path = get_path(arguments);
+        if (path != "")
+        {
+          cout << arguments << " is " << path << endl;
+          isCommand = false;
+        }
+      }
+      if (isCommand)
+        cout << arguments << ": not found\n";
     }
-    return newDirectory;
-}
-int main() {
-    std::string currentDirectory = std::filesystem::current_path();
-    while (true) {
-        // Flush after every std::cout / std:cerr
-        std::cout << std::unitbuf;
-        std::cerr << std::unitbuf;
-        // Uncomment this block to pass the first stage
-        std::cout << "$ ";
-        std::string input;
-        std::getline(std::cin, input);
-        std::vector<std::string> tokens = createInputTokens(input);
-        if (tokens.empty()){
+    else if (command == "pwd")
+    {
+      cout << filesystem::current_path().string() << endl;
+    }
+    else if (command == "cd")
+    {
+      try
+      {
+        if (arguments.empty() || arguments == "~")
+        {
+          char *home = getenv("HOME");
+          if (home)
+          {
+            filesystem::current_path(home);
+          }
+          else
+          {
+            cerr << "cd: HOME not set" << endl;
+          }
+        }
+        else if (filesystem::exists(arguments) && filesystem::is_directory(arguments))
+        {
+          filesystem::current_path(arguments);
+        }
+        else
+        {
+          cerr << "cd: " << arguments << ": No such file or directory" << endl;
+        }
+      }
+      catch (const filesystem::filesystem_error &e)
+      {
+        cerr << "cd: " << arguments << ": No such file or directory" << endl;
+      }
+    }
+    else if (command == "cat")
+    {
+      // cout << "cat command entered\n";
+      int containQ = containQuotes(arguments);
+      vector<string> files = containQ == 2 ? splitArgs(arguments, '\"') : splitArgs(arguments);
+      bool all_exists = true;
+      bool firstFile = true;
+      fstream fileOut;
+      string line;
+      if (inFile)
+      {
+        files = splitForSpaces(arguments);
+        ofstream out(outPutFile, append ? ios::app : ios::out);
+        for (const auto &file : files)
+        {
+          if (file == " ")
             continue;
-        }
-        if (tokens[0] == "exit"){
-            break;
-        }
-        if (tokens[0] == "echo"){
-            handleEcho(tokens);
-        }
-        else if (tokens[0] == "type"){
-            handleType(tokens);
-        }
-        else if (tokens[0] == "pwd")
-        {
-            std::cout << currentDirectory << std::endl;
-        }
-        else if (tokens[0] == "cd")
-        {
-            if (isAbsolutePath(tokens[1])) {
-                if (std::filesystem::is_directory(tokens[1]))
-                {
-                    currentDirectory = tokens[1];
-                }
-                else
-                {
-                    std::cout << "cd: " << tokens[1] << ": No such file or directory" << std::endl;
-                }
-            }
-            else if (isRelativePathChild(tokens[1])) {
-                std::string directoryToAppend = tokens[1].substr(1, tokens[1].length() - 1);
-                std::string testDirectory = currentDirectory + directoryToAppend;
-                if (std::filesystem::is_directory(testDirectory))
-                {
-                    currentDirectory = testDirectory;
-                }
-                else
-                {
-                    std::cout << "cd: " << testDirectory << ": No such file or directory" << std::endl;
-                }
-            }
-            else if (isRelativePathParent(tokens[1])) {
-                size_t count = 0;
-                std::string currentInputDirectory = tokens[1];
-                do {
-                    count++;
-                    currentInputDirectory = currentInputDirectory.substr(3, tokens[1].length() - 3);
-                } while (isRelativePathParent(currentInputDirectory));
-                currentDirectory = goUpNDirectories(currentDirectory, count);
-                if (currentInputDirectory.length() > 1) {
-                    currentDirectory += "/" + currentInputDirectory;
-                }
-            }
-            else if (isHomeDirectory(tokens[1])) {
-                char const* homeDirectory = std::getenv("HOME");
-                if (tokens[1].length() > 1) {
-                    std::string directoryToAppend = tokens[1].substr(1, tokens[1].length() - 1);
-                    currentDirectory = homeDirectory + directoryToAppend;
-                }
-                else {
-                    currentDirectory = homeDirectory;
-                }
+          fileOut.open(file);
+          if (!fileOut.is_open())
+          {
+            if (!stderr_2)
+            {
+              cerr << "cat: " << file << ": No such file or directory" << endl;
+              all_exists = false;
+              break;
             }
             else
             {
-                std::cout << "cd: " << tokens[1] << ": No such file or directory" << std::endl;
+              out << "cat: " << file << ": No such file or directory" << endl;
             }
-        }
-        else {
-            bool wasExecutable = handleExecutable(tokens);
-            if (!wasExecutable)
+            continue;
+          }
+          while (getline(fileOut, line))
+          {
+            if (!stderr_2)
             {
-                std::cout << input << ": command not found" << std::endl;
+              out << line;
             }
+            else
+              cout << line << endl;
+          }
+          fileOut.close();
+          firstFile = false;
+          // cout << "output : " << output << endl;
         }
+        // cout << endl;
+        // break;
+      }
+      // cout << "file size :" << files.size() << endl;
+      if (!inFile)
+      {
+        for (const auto &file : files)
+        {
+          // cout << "file :" << file << endl;
+          if (file == " ")
+            continue;
+          fileOut.open(file);
+          if (!fileOut.is_open())
+          {
+            cerr << "cat: " << file << ": No such file or directory" << endl;
+            continue;
+          }
+          while (getline(fileOut, line))
+          {
+            if (!containQ)
+            {
+              cout << line << endl;
+            }
+            else
+              cout << line;
+          }
+          fileOut.close();
+          fileOut.clear();
+        }
+      }
+      if (containQ)
+        cout << endl;
     }
-    return 0;
+    else if (input[0] == '\'' || input[0] == '\"')
+    {
+      try
+      {
+        string resolvedPath = get_path(command, cQ, string(1, input[0]));
+        string fullExe = resolvedPath + " " + arguments;
+        // cout << resolvedPath << endl;
+        // if (is_exe(resolvedPath))
+        // {
+        int result = system(fullExe.c_str());
+        if (result != 0)
+        {
+          cerr << "Error: Command execution failed." << endl;
+        }
+        // }
+        // else
+        // {
+        //   cout << "hhhhhhhhhh: " << fullExe.c_str() << endl;
+        //   cerr << "Error: " << command << " is not executable." << endl;
+        // }
+      }
+      catch (const filesystem::filesystem_error &e)
+      {
+        cerr << "Error: " << e.what() << endl;
+      }
+    }
+    else if (is_exe(command))
+    {
+      string fullExe = get_basename(get_path(command)) + " " + arguments;
+      if (inFile)
+      {
+        // cout << "infile .... ";
+        ofstream out(outPutFile, append ? ios::app : ios::out);
+        string cmdWithRedirect = fullExe + " 2>&1";
+        FILE *pipe = stderr_2 ? popen(cmdWithRedirect.c_str(), "r") : popen(fullExe.c_str(), "r");
+        // cout<<"pipe : " << pipe << endl;
+        if (!pipe)
+        {
+          cerr << "Error: Failed to execute command: " << fullExe << endl;
+          out.close();
+          return 0;
+        }
+        char buffer[128];
+        // cout << *fgets(buffer, sizeof(buffer), pipe) << endl;
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
+        {
+          out << buffer;
+          // cout << "here _1 " << endl;
+        }
+        pclose(pipe);
+        // out.close();
+      }
+      else
+      {
+        // cout << "not infile=========";
+        system(fullExe.c_str());
+      }
+    }
+    else
+      cout << input << ": command not found\n";
+  }
 }
