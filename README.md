@@ -1,7 +1,7 @@
-# Shell Project - Codecrafters
+# Shell Project - 
 
 ## Overview
-This is a simple shell built in C as part of the Codecrafters course. It emulates basic shell functionality like command execution, input/output redirection, and built-in commands.
+This is a simple shell built in C++. It emulates basic shell functionality like command execution, input/output redirection, and built-in commands.
 
 ## Features
 - Execute commands using `pwd` and `ls`.
