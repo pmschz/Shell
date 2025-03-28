@@ -1,450 +1,319 @@
 #include <iostream>
-#include <set>
 #include <string>
-#include <filesystem>
-#include <fstream>
-#include <cstdlib>
 #include <vector>
-using namespace std;
-
-string get_path(string command, bool cQ = false, string Quote = "")
-{
-  char *path = getenv("PATH");
-  string p = string(path);
-  string pth = "";
-  set<string> pathes;
-  for (int i = 0; i < p.size(); i++)
-  {
-    if (p[i] == ':')
-    {
-      pathes.insert(pth);
-      pth = "";
-    }
-    else
-      pth += p[i];
+#include <unordered_set>
+#include <algorithm>
+#include <cstdlib>
+#include <sstream>
+#include <filesystem>
+#include <optional>
+#include <numeric>
+#include <fstream>
+#include <termios.h>
+#include <unistd.h>
+std::unordered_set<std::string> commands = {
+  "cd", "echo", "exit", "pwd", "type"
+};
+void split(const std::string& str, std::vector<std::string>& tokens, char delimiter) {
+  std::stringstream ss(str);
+  std::string token;
+  while(std::getline(ss, token, delimiter)) {
+    tokens.push_back(token);
   }
-  pathes.insert(pth);
-  for (string cmd : pathes)
-  {
-    string file = cmd + "/" + command;
-    if (filesystem::exists(file))
-    {
-      string resolved_path = filesystem::canonical(file).string();
-      if (cQ)
-        return cmd + "/" + Quote + command + Quote;
-      else
-        return resolved_path;
+}
+std::optional<std::string> findInPath(const std::vector<std::string>& pathDirectories, const std::string& command) {
+  for(const auto& directory : pathDirectories) {
+    std::filesystem::path path(directory);
+    path /= command;
+    if(std::filesystem::exists(path)) {
+      return path.string();
     }
   }
-  return "";
+  return std::nullopt;
 }
-string get_basename(const string &path)
-{
-  return filesystem::path(path).filename().string();
+std::optional<std::string> buildPath(const std::string& arg, std::string currentPath, const std::string& HOME_PATH) {
+  std::vector<std::string> pathDirectories;
+  split(arg, pathDirectories, '/');
+  if(arg.front() == '/') {
+    currentPath = "/";
+  }
+  for(const auto& directory : pathDirectories) {
+    if(directory == "." || directory == "") {
+      continue;
+    }
+    else if(directory == "~") {
+      currentPath = std::filesystem::path(HOME_PATH).string();
+    }
+    else if(directory == "..") {
+      currentPath = std::filesystem::path(currentPath).parent_path();
+    }
+    else {
+      std::filesystem::path path(currentPath);
+      path /= directory;
+      if(std::filesystem::exists(path)) {
+        currentPath = path.string();
+      }
+      else {
+       return std::nullopt; 
+      }
+    }
+    }
+  return currentPath;
 }
-bool is_exe(string command)
-{
-  string path = get_path(command);
-  if (filesystem::exists(path))
-  {
-    auto perms = filesystem::status(path).permissions();
-    return (perms & filesystem::perms::owner_exec) != filesystem::perms::none ||
-           (perms & filesystem::perms::group_exec) != filesystem::perms::none ||
-           (perms & filesystem::perms::others_exec) != filesystem::perms::none;
+void handleSpecialCharsOutsideQuotes(std::string& s) {
+  int posLastSeenQuote = -1;
+  for(size_t i = 0; i + 1 < s.size(); ++i) {
+    if(s[i] == '\"') {
+      posLastSeenQuote *= -1;
+    }
+    else if(s[i] == '\\' && posLastSeenQuote == -1) {
+      s.erase(i, 1);
+    }
+  }
+}
+std::string parseInputWithoutLiterals(const std::string& input) {
+    std::istringstream iss(input);
+    std::string token, parsedInput;
+    while(iss >> token) {
+      parsedInput += token + ' ';
+    }
+    parsedInput.pop_back();
+    handleSpecialCharsOutsideQuotes(parsedInput);
+    return parsedInput;
+}
+void handleSpecialChars(std::string& s) {
+  for(size_t i = 0; i + 1 < s.size(); ++i) {
+    if(s[i] == '\\' && (s[i + 1] == '\\' || s[i + 1] == '$' || s[i + 1] == '\"')) {
+      s.erase(i, 1);
+    }
+  }
+}
+bool checkLiteral(const std::string& input, int pos, const char literal) {
+  return input[pos] == literal &&
+    (pos == 0 || input[pos - 1] != '\\' || (pos > 1 && input[pos - 1] == '\\' && input[pos - 2] == '\\'));
+}
+bool checkIfLiteralsExist(const std::string& args) {
+  for(size_t i = 1; i < args.size(); ++i) {
+    if(checkLiteral(args, i, '\"') || checkLiteral(args, i, '\'')) {
+      return true;
+    }
   }
   return false;
 }
-int containQuotes(string arg)
-{
-  // cout<<arg<<endl;
-  // cout << arg[arg.size() - 1] << endl;
-  if ((arg[0] == '\'' && arg[arg.size() - 1] == '\''))
-    return 1;
-  else if ((arg[0] == '\"' && arg[arg.size() - 1] == '\"'))
-    return 2;
-  else
-    return 0;
-}
-vector<string> splitArgs(string arg, char del = '\'')
-{
-  string part = "";
-  vector<string> results;
-  int Qcount = 0;
-  for (int i = 0; i < arg.size(); i++)
-  {
-    if (part == " " && arg[i] == ' ' && part.size() == 1)
-    {
-      continue;
-    }
-    if (arg[i] == del && (arg[i + 1] == ' ' || arg[i + 1] == del) || part == " ")
-    {
-      results.push_back(part);
-      part = "";
-    }
-    if (arg[i] == del)
-    {
-      continue;
-    }
-    if (arg[i] == '\\' and del == '\"')
-    {
-      if (i + 1 < arg.size() && (arg[i + 1] == '$' || arg[i + 1] == '"' || arg[i + 1] == '\\'))
-      {
-        part += arg[i + 1];
-        i++;
+std::string parseInputWithLiterals(const std::string& input) {
+  std::string newInput;
+  size_t i = 0, j;
+  while(i < input.size()) {
+    if(checkLiteral(input, i, '\'')) {
+      j = i + 1;
+      while(j < input.size() && !checkLiteral(input, j, '\'')) {
+        ++j;
       }
-      else
-      {
-        part += '\\';
+      if(j < input.size() + 1) {
+        std::string literal = input.substr(i + 1, j - i - 1);
+        newInput += literal;
+      }
+      i = j + 1;
+      if(i < input.size() && input[i] != '\'') {
+        newInput += ' ';
       }
     }
-    else
-    {
-      part += arg[i];
+    else if(checkLiteral(input, i, '\"')) {
+      j = i + 1;
+      while(j < input.size() && !checkLiteral(input, j, '\"')) {
+        ++j;
+      }
+      if(j < input.size() + 1) {
+        std::string literal = input.substr(i + 1, j - i - 1);
+        handleSpecialChars(literal);
+        newInput += literal;
+      }
+      i = j + 1;
+      if(i < input.size() && input[i] != '\"') {
+        newInput += ' ';
+      }
+    }
+    else {
+      ++i;
     }
   }
-  results.push_back(part);
-  return results;
-}
-vector<string> getCommand(string input)
-{
-  vector<string> tokens(2);
-  string command = "";
-  int i = 1;
-  char Quote = input[0];
-  while (input[i] != Quote)
-  {
-    command += input[i];
-    i++;
+  if(j < input.size()) {
+    if(newInput.back() == ' ') newInput.pop_back();
+    std::string strToAdd = input.substr(j + 1);
+    handleSpecialChars(strToAdd);
+    newInput += strToAdd;
   }
-  // cout << "command : " << command << endl;
-  tokens[0] = command;
-  i++;
-  command = "";
-  while (i < input.size())
-  {
-    command += input[i];
-    i++;
-  }
-  // cout << "args : " << command << endl;
-  tokens[1] = command;
-  return tokens;
+  return newInput;
 }
-vector<string> splitForSpaces(string args)
-{
-  vector<string> results;
-  string part = "";
-  for (int i = 0; i < args.size(); i++)
-  {
-    if (args[i] != ' ')
-      part += args[i];
-    else
-    {
-      results.push_back(part);
-      part = "";
-    }
-  }
-  results.push_back(part);
-  return results;
+void enableRawMode() {
+  termios term;
+  tcgetattr(STDIN_FILENO, &term);
+  term.c_lflag &= ~(ICANON | ECHO);
+  tcsetattr(STDIN_FILENO, TCSANOW, &term);
 }
-int main()
-{
-  cout << unitbuf;
-  cerr << unitbuf;
-  // for (auto it = pathes.begin(); it != pathes.end(); it++)
-  //   cout << *it << endl;
-  set<string> commands = {"echo", "exit", "type", "pwd", "cd"};
-  string input;
-  while (true)
-  {
-    cout << "$ ";
-    getline(std::cin, input);
-    if (input == "exit 0")
+void disableRawMode() {
+  termios term;
+  tcgetattr(STDIN_FILENO, &term);
+  term.c_lflag |= (ICANON | ECHO);
+  tcsetattr(STDIN_FILENO, TCSANOW, &term);
+}
+void handleTabPress(std::string& input) {
+  if(input == "ech") {
+    input = "echo ";
+    std::cout << "o ";
+  }
+  else if(input == "exi") {
+    input = "exit ";
+    std::cout << "t ";
+  }
+  else {
+    //
+  }
+}
+void readInputWithTabSupport(std::string& input) {
+  enableRawMode();
+  char c;
+  while (true) {
+    c = getchar();
+    if (c == '\n') {
+      std::cout << std::endl;
       break;
-    bool cQ = (input[0] == '\'' || input[0] == '\"');
-    // dashOne = input.find("-1") != string::npos;
-    vector<string> tokens = cQ ? getCommand(input) : vector<string>();
-    string command = cQ ? tokens[0] : input.substr(0, input.find(" "));
-    string arguments = cQ ? tokens[1] : input.substr(input.find(" ") + 1);
-    string outPutFile;
-    bool inFile = false;
-    size_t redirPos = arguments.find(">");
-    bool stderr_2 = arguments[redirPos - 1] == '2';
-    bool append = arguments[redirPos + 1] == '>';
-    // cout << append << endl;
-    if (redirPos != string::npos)
-    {
-      outPutFile = append ? arguments.substr(redirPos + 2) : arguments.substr(redirPos + 1);
-      size_t firstChar = outPutFile.find_first_not_of(" ");
-      size_t lastChar = outPutFile.find_last_not_of(" ");
-      outPutFile = outPutFile.substr(firstChar, lastChar - firstChar + 1);
-      if (arguments[redirPos - 1] == '1' || arguments[redirPos - 1] == '2')
-        arguments = arguments.substr(0, redirPos - 2);
-      else
-        arguments = arguments.substr(0, redirPos - 1);
-      inFile = true;
+    } else if (c == '\t') {
+      handleTabPress(input);
+    } else if (c == 127) {
+      if (!input.empty()) {
+        input.pop_back();
+        std::cout << "\b \b"; // Move cursor back, overwrite character with space, move cursor back again.
+      }
+    } else {
+      input += c;
+      std::cout << c;
     }
-    // cout << arguments << endl;
-    bool isCommand = true;
-    if (command == "echo")
-    {
-      int containQ = containQuotes(arguments);
-      // cout << containQ << endl;
-      string output = "";
-      if (containQ)
-      {
-        vector<string> args = containQ == 2 ? splitArgs(arguments, '\"') : splitArgs(arguments);
-        for (auto &arg : args)
-        {
-          // cout<<arg<<endl;
-          ofstream out(outPutFile, append ? ios::app : ios::out);
-          for (int i = 0; i < arg.size(); i++)
-          {
-            output += arg[i];
-          }
-          if (inFile && stderr_2 == false)
-          {
-            out << output << endl;
-            out.close();
-          }
-          else if (stderr_2)
-          {
-            try
-            {
-              cout << output << endl;
-            }
-            catch (const std::exception &e)
-            {
-              out << e.what();
-              // out.close();
-            }
-          }
-          else
-            cout << output;
-          output = "";
-        }
-        if (!inFile)
-          cout << endl;
-      }
-      else
-      {
-        bool space = false;
-        for (int i = 0; i < arguments.size(); i++)
-        {
-          // if (i != arguments.size() - 1 && arguments[i] == '\\')
-          //   output += arguments[i + 1];
-          if (i > 0 && arguments[i] == '\\' && arguments[i - 1] == '\\')
-            output += arguments[i];
-          if (arguments[i] != ' ' && arguments[i] != '\\')
-            output += arguments[i];
-          if (arguments[i] != ' ' && arguments[i + 1] == ' ')
-          {
-            // output += arguments[i];
-            output += " ";
-          }
-        }
-        //  \'\"example world\"\'
-        //  '"example world "'
-        if (inFile)
-        {
-          ofstream out(outPutFile, append ? ios::app : ios::out);
-          out << output << endl;
-          // out.close();
-        }
-        else
-          cout << output << endl;
-        // cout << arguments << endl;
-      }
-    }
-    else if (command == "type")
-    {
-      if (commands.find(arguments) != commands.end())
-      {
-        cout << arguments << " is a shell builtin\n";
-        isCommand = false;
-      }
-      else
-      {
-        string path = get_path(arguments);
-        if (path != "")
-        {
-          cout << arguments << " is " << path << endl;
-          isCommand = false;
-        }
-      }
-      if (isCommand)
-        cout << arguments << ": not found\n";
-    }
-    else if (command == "pwd")
-    {
-      cout << filesystem::current_path().string() << endl;
-    }
-    else if (command == "cd")
-    {
-      try
-      {
-        if (arguments.empty() || arguments == "~")
-        {
-          char *home = getenv("HOME");
-          if (home)
-          {
-            filesystem::current_path(home);
-          }
-          else
-          {
-            cerr << "cd: HOME not set" << endl;
-          }
-        }
-        else if (filesystem::exists(arguments) && filesystem::is_directory(arguments))
-        {
-          filesystem::current_path(arguments);
-        }
-        else
-        {
-          cerr << "cd: " << arguments << ": No such file or directory" << endl;
-        }
-      }
-      catch (const filesystem::filesystem_error &e)
-      {
-        cerr << "cd: " << arguments << ": No such file or directory" << endl;
-      }
-    }
-    else if (command == "cat")
-    {
-      // cout << "cat command entered\n";
-      int containQ = containQuotes(arguments);
-      vector<string> files = containQ == 2 ? splitArgs(arguments, '\"') : splitArgs(arguments);
-      bool all_exists = true;
-      bool firstFile = true;
-      fstream fileOut;
-      string line;
-      if (inFile)
-      {
-        files = splitForSpaces(arguments);
-        ofstream out(outPutFile, append ? ios::app : ios::out);
-        for (const auto &file : files)
-        {
-          if (file == " ")
-            continue;
-          fileOut.open(file);
-          if (!fileOut.is_open())
-          {
-            if (!stderr_2)
-            {
-              cerr << "cat: " << file << ": No such file or directory" << endl;
-              all_exists = false;
-              break;
-            }
-            else
-            {
-              out << "cat: " << file << ": No such file or directory" << endl;
-            }
-            continue;
-          }
-          while (getline(fileOut, line))
-          {
-            if (!stderr_2)
-            {
-              out << line;
-            }
-            else
-              cout << line << endl;
-          }
-          fileOut.close();
-          firstFile = false;
-          // cout << "output : " << output << endl;
-        }
-        // cout << endl;
-        // break;
-      }
-      // cout << "file size :" << files.size() << endl;
-      if (!inFile)
-      {
-        for (const auto &file : files)
-        {
-          // cout << "file :" << file << endl;
-          if (file == " ")
-            continue;
-          fileOut.open(file);
-          if (!fileOut.is_open())
-          {
-            cerr << "cat: " << file << ": No such file or directory" << endl;
-            continue;
-          }
-          while (getline(fileOut, line))
-          {
-            if (!containQ)
-            {
-              cout << line << endl;
-            }
-            else
-              cout << line;
-          }
-          fileOut.close();
-          fileOut.clear();
-        }
-      }
-      if (containQ)
-        cout << endl;
-    }
-    else if (input[0] == '\'' || input[0] == '\"')
-    {
-      try
-      {
-        string resolvedPath = get_path(command, cQ, string(1, input[0]));
-        string fullExe = resolvedPath + " " + arguments;
-        // cout << resolvedPath << endl;
-        // if (is_exe(resolvedPath))
-        // {
-        int result = system(fullExe.c_str());
-        if (result != 0)
-        {
-          cerr << "Error: Command execution failed." << endl;
-        }
-        // }
-        // else
-        // {
-        //   cout << "hhhhhhhhhh: " << fullExe.c_str() << endl;
-        //   cerr << "Error: " << command << " is not executable." << endl;
-        // }
-      }
-      catch (const filesystem::filesystem_error &e)
-      {
-        cerr << "Error: " << e.what() << endl;
-      }
-    }
-    else if (is_exe(command))
-    {
-      string fullExe = get_basename(get_path(command)) + " " + arguments;
-      if (inFile)
-      {
-        // cout << "infile .... ";
-        ofstream out(outPutFile, append ? ios::app : ios::out);
-        string cmdWithRedirect = fullExe + " 2>&1";
-        FILE *pipe = stderr_2 ? popen(cmdWithRedirect.c_str(), "r") : popen(fullExe.c_str(), "r");
-        // cout<<"pipe : " << pipe << endl;
-        if (!pipe)
-        {
-          cerr << "Error: Failed to execute command: " << fullExe << endl;
-          out.close();
-          return 0;
-        }
-        char buffer[128];
-        // cout << *fgets(buffer, sizeof(buffer), pipe) << endl;
-        while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
-        {
-          out << buffer;
-          // cout << "here _1 " << endl;
-        }
-        pclose(pipe);
-        // out.close();
-      }
-      else
-      {
-        // cout << "not infile=========";
-        system(fullExe.c_str());
-      }
-    }
-    else
-      cout << input << ": command not found\n";
   }
+  disableRawMode();
+}
+int main() {
+  // Flush after every std::cout / std:cerr
+  std::cout << std::unitbuf;
+  std::cerr << std::unitbuf;
+  std::string currentPath = std::filesystem::current_path();
+  const std::string HOME_PATH = std::getenv("HOME");
+  std::vector<std::string> pathDirectories;
+  split(std::getenv("PATH"), pathDirectories, ':');
+  while(true) {
+    std::cout << "$ ";
+    std::string input;
+    readInputWithTabSupport(input);
+    // std::getline(std::cin, input);
+    bool redirect = false, redirectError = false, append = false;
+    std::string redirectPath = "";
+    if(auto it = input.find('>'); it != std::string::npos) {
+      if(it + 1 < input.size() && input[it + 1] == '>') {
+        append = true;
+        ++it;
+      }
+      redirectPath = input.substr(it + 2, input.size() - it - 2);
+      if(append) --it;
+      input = input.substr(0, it);
+      if(input.back() == '1') {
+        input.pop_back();
+        redirect = true;
+      }
+      else if(input.back() == '2') {
+        input.pop_back();
+        redirectError = true;
+      }
+      else {
+        redirect = true;
+      }
+      input.pop_back();
+    }
+    std::vector<std::string> tokens;
+    split(input, tokens, ' ');
+    if(tokens.empty()) continue;
+    std::string args = std::accumulate(tokens.begin() + 1, tokens.end(), std::string(),
+      [](const std::string& a, const std::string& b) {
+        return a + (a.length() > 0 ? " " : "") + b;
+      });
+    std::string redirectionSpecifier = "";
+    if(redirect) redirectionSpecifier += " 1>";
+    else if(redirectError) redirectionSpecifier += " 2>";
+    if(append) redirectionSpecifier += ">";
+    redirectionSpecifier += " ";
+    if(tokens.front() == "cat") {
+      std::string command = tokens.front() + ' ' + args;
+      command += redirectionSpecifier + redirectPath;
+      std::system(command.c_str());
+    }
+    else if(tokens.front() == "cd") {
+      auto newPath = buildPath(tokens[1], currentPath, HOME_PATH);
+      if(newPath.has_value()) {
+        currentPath = newPath.value();
+      }
+      else {
+        std::cout << "cd: " << tokens[1] <<  ": No such file or directory" << std::endl;
+      }
+    }
+    else if(tokens.front() == "echo") {
+      std::string command;
+      if(checkIfLiteralsExist(input)) {
+        command = parseInputWithLiterals(input.substr(5));
+      }
+      else {
+        command = parseInputWithoutLiterals(input).substr(5);
+      }
+      if(redirect) {
+        std::filesystem::path newFilePath{redirectPath};
+        std::ofstream file(newFilePath, (append ? std::ios_base::app : std::ios_base::out));
+        if(file) {
+          file << command << std::endl;
+        }
+      }
+      else if(redirectError) {
+        std::filesystem::path newFilePath{redirectPath};
+        std::ofstream file(newFilePath, (append ? std::ios_base::app : std::ios_base::out));
+        std::cout << command << std::endl;
+      }
+      else {
+        std::cout << command << std::endl;
+      }
+    }
+    else if(tokens.front() == "exit" && tokens[1] == "0") {
+      return 0;
+    }
+    else if(tokens.front() == "ls") {
+      std::string command = tokens.front() + ' ' + args;
+      command += redirectionSpecifier + redirectPath;
+      std::system(command.c_str());
+    }
+    else if(tokens.front() == "pwd") {
+      std::cout << currentPath << std::endl;
+    }
+    else if(tokens.front() == "type") {
+      std::string commandToType = tokens[1];
+      if(commands.find(commandToType) != commands.end())
+        std::cout << commandToType << " is a shell builtin" << std::endl;
+      else if(auto path = findInPath(pathDirectories, commandToType); path.has_value())
+        std::cout << path.value() << std::endl;
+      else
+        std::cout << commandToType << ": not found" << std::endl;
+    }
+    else if(input.front() == '\'') {
+      size_t lastSingleQuote = input.find_last_of('\'');
+        std::string filepath = input.substr(lastSingleQuote + 2);
+        std::system(("cat " + filepath).c_str());
+    }
+    else if(input.front() == '\"') {
+      size_t lastSingleQuote = input.find_last_of('\"');
+        std::string filepath = input.substr(lastSingleQuote + 2);
+        std::system(("cat " + filepath).c_str());
+    }
+    else if(auto commandPath = findInPath(pathDirectories, tokens.front()); commandPath.has_value()) {
+      std::system((tokens.front() + ' ' + args).c_str());
+    }
+    else {
+      std::cout << tokens.front() << ": command not found" << std::endl;
+    }
+  }
+  return 0;
 }
