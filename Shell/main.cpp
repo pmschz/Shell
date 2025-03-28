@@ -8,6 +8,12 @@
 #include <termios.h>
 #include <unistd.h>
 #include <set>
+#include <algorithm>
+
+bool starts_with(const std::string& str, const std::string& prefix) {
+  return str.find(prefix) == 0;
+}
+
 const std::string CMD_EXIT = "exit";
 const std::string CMD_ECHO = "echo";
 const std::string CMD_TYPE = "type";
@@ -149,7 +155,7 @@ void handle_pwd() {
 }
 void handle_cd(std::string& input) {
   auto path = input.substr(CMD_CD.size() + 1);
-  if (path.starts_with("/")) {
+  if (starts_with(path, "/")) {
     if (!std::filesystem::exists(path)){
       std::cout << "cd: " << path << ": No such file or directory" << std::endl;
       return;
@@ -223,10 +229,10 @@ std::string get_input_with_completion(const std::vector<std::string>& paths) {
     // TAB
     if (c == '\t') {
       std::set<std::string> matches;
-      if (CMD_ECHO.starts_with(input)) {
+      if (starts_with(CMD_ECHO, input)) {
         matches.insert(CMD_ECHO);
       }
-      if (CMD_EXIT.starts_with(input)) {
+      if (starts_with(CMD_EXIT, input)) {
         matches.insert(CMD_EXIT);
       }
       if (matches.size() == 1) {
@@ -243,7 +249,7 @@ std::string get_input_with_completion(const std::vector<std::string>& paths) {
         if (!std::filesystem::exists(path)) continue;
         for (const auto& entry : std::filesystem::directory_iterator(path)) {
             std::string filename = entry.path().filename().string();
-            if (filename.starts_with(input)) {
+            if (starts_with(filename, input)) {
               matches.insert(filename);
             }
         }
@@ -310,13 +316,13 @@ int main() {
     std::string input = get_input_with_completion(paths);
     if (input == "exit 0") {
       break;
-    } else if (input.starts_with(CMD_ECHO)) {
+    } else if (starts_with(input, CMD_ECHO)) {
       handle_echo(input);
-    } else if (input.starts_with(CMD_TYPE)) {
+    } else if (starts_with(input, CMD_TYPE)) {
       handle_type(input, paths);
-    } else if (input.starts_with(CMD_PWD)) {
+    } else if (starts_with(input, CMD_PWD)) {
       handle_pwd();
-    } else if (input.starts_with(CMD_CD)) {
+    } else if (starts_with(input, CMD_CD)) {
       handle_cd(input);
     } else {
       handle_run(input, paths);
