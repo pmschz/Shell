@@ -1,4 +1,4 @@
-# Shell Project - 
+# Shell Project
 
 ## Overview
 This is a simple shell built in C++. It emulates basic shell functionality like command execution, input/output redirection, and built-in commands.
