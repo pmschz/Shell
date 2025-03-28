@@ -1,141 +1,310 @@
-#include <unistd.h>
-#include <filesystem>
 #include <iostream>
-#include <stdexcept>
+#include <unordered_map>
+#include <string>
 #include <vector>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
-#include <vector>
-namespace fs = std::filesystem;
-std::string SearchExecutable(const std::string &executable_name, const std::string &env_p)
+std::unordered_map<std::string, bool> builtInCommands;
+void initCommands()
 {
-    std::stringstream ss(env_p);
-    std::vector<std::string> paths;
-    std::string p;
-    while (std::getline(ss, p, ':'))
-    {
-        paths.push_back(p);
-    }
-    for (const auto &path : paths)
-    {
-        try
-        {
-            for (const auto &entry : fs::recursive_directory_iterator(path))
-            {
-                if (entry.is_regular_file() &&
-                    entry.path().filename() == executable_name)
-                {
-                    auto perms = entry.status().permissions();
-                    if ((perms & fs::perms::owner_exec) != fs::perms::none ||
-                        (perms & fs::perms::group_exec) != fs::perms::none ||
-                        (perms & fs::perms::others_exec) != fs::perms::none)
-                    {
-                        return entry.path().c_str();
-                    }
-                }
-            }
-        }
-        catch (const std::exception &ex)
-        {
-        }
-    }
-    return "";
+  builtInCommands["echo"] = true;
+  builtInCommands["type"] = true;
+  builtInCommands["exit"] = true;
+  builtInCommands["pwd"] = true;
+  builtInCommands["cat"] = true;
 }
-std::string EchoMessage(const std::string &params)
+std::string getPath(std::string command)
 {
-    std::string result = "";
-    if ((params.at(0) == '\'') && (params.at(params.size() - 1) == '\''))
+  std::string newCommand;
+  std::string chFront, chBack;
+  if(command.front() == '\'' || command.front() == '\"') {
+    if(command.size() > 0 && (command.front() == '\'' || command.front() == '\"'))
+      newCommand = command.substr(1);
+    if(command.size() > 0 && (command.back() == '\'' || command.back() == '\"'))
+      newCommand = newCommand.substr(0, newCommand.size()-1);
+    chFront = command.front();
+    chBack = command.back();
+  }
+  else {
+    newCommand = command;
+    chFront = "";
+    chBack = "";
+  }
+  std::string pathEnv = std::getenv("PATH");
+  std::stringstream pathStream(pathEnv);
+  std::string path;
+  while (!pathStream.eof())
+  {
+    std::getline(pathStream, path, ':');
+    std::string fullPath = path + "/" + newCommand;
+    if (std::filesystem::exists(fullPath))
     {
-        result = params.substr(1, params.size() - 1);
-        result = result.substr(0, result.size() - 1);
+      return path + "/" + chFront + newCommand + chBack;
     }
+  }
+  return "";
+}
+void handleNotFound(std::string command)
+{
+  std::cerr << command << ": command not found" << std::endl;
+}
+void handleEcho(std::string argument)
+{
+  char check = '\0';
+  std::vector<std::string> printable;
+  std::string word = "";
+  bool isInsideQuotes = false;
+  for(int i = 0; i < argument.size(); i++) {
+    if(check == 'd' && argument[i] == '\"')
+    {
+      if(check == 'd')
+        check = '\0';
+      if(argument[i] == '\'')
+        isInsideQuotes = !isInsideQuotes;
+      if(i+1 < argument.size() && argument[i+1] == ' ')
+        word += ' ';
+      if(i > 0)
+        printable.push_back(word);
+      word = "";
+    }
+    else if (check == 'c' && argument[i] == '\'')
+    {
+      if(check == 'c')
+        check = '\0';
+      if(i+1 < argument.size() && argument[i+1] == ' ')
+        word += ' ';
+      if(i > 0)
+        printable.push_back(word);
+      word = "";
+    }
+    else if(check == '\0') {
+      if(argument[i] == ' ' && word.size() > 0) {
+        word += ' ';
+        printable.push_back(word);
+        word = "";
+      }
+      else if(argument[i] == '\"') {
+        check = 'd';
+      }
+      else if(argument[i] == '\'') {
+        check = 'c';
+      }
+      else if(argument[i] != ' ') {
+        if(argument[i] == '\\') {
+          word += argument[i+1];
+          i++;
+        }
+        else
+          word += argument[i];
+      }
+    }
+    else if (check == 'c' || check == 'd')
+    {
+      if(check == 'd' && argument[i] == '\\' && i+1 < argument.size() && (argument[i+1] == '\'' || argument[i+1] == '\"' || argument[i+1] == '\\')) {
+        word += argument[i+1];
+        i++;
+      }
+      else
+        word += argument[i];
+    }
+  }
+  if(word.size() > 0)
+    printable.push_back(word);
+  std::string toPrint = "";
+  for(auto iword : printable)
+  {
+    toPrint += iword;
+  }
+  std::cout << toPrint << std::endl;
+}
+void handleType(std::string argument)
+{
+  if (builtInCommands[argument]) {
+    if(argument == "cat")
+      std::cout << "cat is /usr/bin/cat" << std::endl;
+    else
+      std::cout << argument << " is a shell builtin" << std::endl;
+  }
+  else
+  {
+    std::string path = getPath(argument);
+    if (path.empty())
+      std::cerr << argument << ": not found" << std::endl;
+    else
+      std::cout << argument << " is " << path << std::endl;
+  }
+}
+void handleExecutablePath(std::string command, std::string argument)
+{
+  std::string path = getPath(command);
+  if (path.empty())
+    handleNotFound(command);
+  else
+  {
+    std::string execCommand = "exec " + path + " " + argument;
+    std::system(execCommand.c_str());
+  }
+}
+void handlePwd()
+{
+  std::string currentPath = std::filesystem::current_path().string();
+  std::cout << currentPath << std::endl;
+}
+void handleCd(std::string argument)
+{
+  if (std::filesystem::exists(argument))
+  {
+    std::filesystem::current_path(argument);
+  }
+  else if (argument == "~")
+  {
+    std::filesystem::current_path(std::getenv("HOME"));
+  }
+  else
+  {
+    std::cerr << "cd: " << argument << ": No such file or directory" << std::endl;
+  }
+}
+void handleCat(std::string argument)
+{
+  std::vector<std::string> files;
+  char check = '\0';
+  std::string file_path = "";
+  for (int i = 0; i < argument.size(); i++)
+  {
+    if(check == 'd' && argument[i] == '\"')
+    {
+      if(check == 'd')
+        check = '\0';
+      if (i > 0)
+        files.push_back(file_path);
+      file_path = "";
+    }
+    else if (check == 'c' && argument[i] == '\'')
+    {
+      if(check == 'c')
+        check = '\0';
+      if (i > 0)
+        files.push_back(file_path);
+      file_path = "";
+    }
+    else if(check == '\0') {
+      if(argument[i] == ' ' && file_path.size() > 0) {
+        files.push_back(file_path);
+        file_path = "";
+      }
+      else if(argument[i] == '\"') {
+        check = 'd';
+      }
+      else if(argument[i] == '\'') {
+        check = 'c';
+      }
+      else if(argument[i] != ' ') {
+        file_path += argument[i];
+      }
+    }
+    else if (check == 'c' || check == 'd')
+    {
+      // if(check == 'd' && argument[i] == '\\' && i+1 < argument.size() && (argument[i+1] == '\"' || argument[i+1] == '\'' || argument[i+1] == '\\' || argument[i+1] == ' ')) {
+      //   file_path += argument[i+1];
+      //   i++;
+      // }
+      // else
+        file_path += argument[i];
+    }
+  }
+  if(file_path.size() > 0)
+    files.push_back(file_path);
+  for (int i = 0; i < files.size(); i++)
+  {
+    std::string ifile = files[i];
+    std::ifstream file(ifile);
+    if (file.is_open())
+    {
+      std::stringstream buffer;
+      buffer << file.rdbuf();
+      std::string fileContent = buffer.str();
+      std::cout << fileContent;
+      file.close();
+      }
     else
     {
-        bool space_found = false;
-        bool apos_start = false;
-        for (auto c : params)
-        {
-            if (c == ' ' && !apos_start) // For any spaces not enclosed by apostrophes
-            {
-                if (!space_found)
-                    space_found = true;
-                else
-                    continue; // More spaces -> ignore them
-            }
-            else if (space_found)
-                space_found = false; // No more spaces to handle
-            if (c == '\"')
-            {
-                apos_start = !apos_start;
-                continue;
-            }
-            result += c;
-        }
+      std::cerr << "cat: " << ifile << ": No such file or directory" << std::endl;
     }
-    return result;
+  }
+}
+bool handleOutput(std::string input)
+{
+  int i = 1;
+  if(input.front() == '\'' || input.front() == '\"')
+  {
+    char ch = input.front();
+    while(i < input.size() && input[i] != ch)
+      i++;
+  }
+  int separator = input.find(" ", i);
+  if (separator == -1)
+  {
+    separator = input.size();
+  }
+  std::string command = separator == input.size() ? input : input.substr(0, separator);
+  std::string argument = separator < input.size() - 1 ? input.substr(separator + 1) : "";
+  if (command == "exit")
+  {
+    return false;
+  }
+  if (command == "echo")
+  {
+    handleEcho(argument);
+    return true;
+  }
+  else if (command == "type")
+  {
+    handleType(argument);
+    return true;
+  }
+  else if (command == "pwd")
+  {
+    handlePwd();
+    return true;
+  }
+  else if (command == "cd")
+  {
+    handleCd(argument);
+    return true;
+  }
+  else if (command == "cat")
+  {
+    handleCat(argument);
+    return true;
+  }
+  else
+  {
+    handleExecutablePath(command, argument);
+    return true;
+  }
+  return false;
 }
 int main()
 {
-    std::string env_p = std::string(getenv("PATH"));
-    while (true)
+  // Flush after every std::cout / std:cerr
+  std::cout << std::unitbuf;
+  std::cerr << std::unitbuf;
+  initCommands();
+  while (true)
+  {
+    std::cout << "$ ";
+    std::string input;
+    std::getline(std::cin, input);
+    bool shouldContinue = handleOutput(input);
+    if (shouldContinue)
     {
-        std::cout << std::unitbuf;
-        std::cerr << std::unitbuf;
-        std::string input;
-        std::cout << "$ ";
-        std::getline(std::cin, input);
-        std::string exec_name = input.substr(0, input.find(' '));
-        std::string params = input.substr(input.find(' ') + 1,
-                                          input.size() - input.find(' ') + 1);
-        if (input == "exit 0")
-            return 0;
-        if (exec_name == "echo")
-        {
-            std::cout << EchoMessage(params) << std::endl;
-            continue;
-        }
-        if (exec_name == "type" && ((params == "echo") || (params == "exit") ||
-                                    (params == "type") || (params == "pwd")))
-        {
-            std::cout << params << " is a shell builtin" << std::endl;
-            continue;
-        }
-        if (exec_name == "type")
-        {
-            std::string exec_path = SearchExecutable(params, env_p);
-            if (exec_path == "")
-                std::cout << params << ": not found" << std::endl;
-            else
-            {
-                std::cout << params << " is " << exec_path << std::endl;
-            }
-            continue;
-        }
-        if (exec_name == "cd")
-        {
-            if (params == "~")
-            {
-                chdir(getenv("HOME"));
-                continue;
-            }
-            if (fs::exists(fs::path(params)))
-            {
-                chdir(params.c_str());
-                continue;
-            }
-            std::cout << exec_name << ": " << params
-                      << ": No such file or directory" << std::endl;
-            continue;
-        }
-        if (SearchExecutable(exec_name, env_p) != "")
-        {
-            system(input.c_str());
-            continue;
-        }
-        if (input == "pwd")
-        {
-            system(input.c_str());
-            continue;
-        }
-        std::cout << exec_name << ": not found" << std::endl;
+      continue;
     }
+    else
+    {
+      return 0;
+    }
+  }
 }
