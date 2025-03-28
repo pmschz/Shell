@@ -1,319 +1,326 @@
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <vector>
-#include <unordered_set>
-#include <algorithm>
-#include <cstdlib>
-#include <sstream>
 #include <filesystem>
-#include <optional>
-#include <numeric>
-#include <fstream>
+#include <unordered_set>
+#include <cstdlib>
 #include <termios.h>
 #include <unistd.h>
-std::unordered_set<std::string> commands = {
-  "cd", "echo", "exit", "pwd", "type"
+#include <set>
+const std::string CMD_EXIT = "exit";
+const std::string CMD_ECHO = "echo";
+const std::string CMD_TYPE = "type";
+const std::string CMD_PWD = "pwd";
+const std::string CMD_CD = "cd";
+std::string WORKING_DIR = "";
+const std::unordered_set<std::string> AVAILABLE_COMMANDS = {
+  CMD_EXIT, CMD_ECHO, CMD_TYPE, CMD_PWD, CMD_CD
 };
-void split(const std::string& str, std::vector<std::string>& tokens, char delimiter) {
-  std::stringstream ss(str);
-  std::string token;
-  while(std::getline(ss, token, delimiter)) {
-    tokens.push_back(token);
+std::vector<std::string> split(std::string& s, char by) {
+  std::vector<std::string> result;
+  size_t start = 0;
+  size_t end = s.find(by, start);
+  while (end != std::string::npos) {
+    result.push_back(s.substr(start, end - start));
+    start = end + 1;
+    end = s.find(by, start);
   }
+  result.push_back(s.substr(start));
+  return result;
 }
-std::optional<std::string> findInPath(const std::vector<std::string>& pathDirectories, const std::string& command) {
-  for(const auto& directory : pathDirectories) {
-    std::filesystem::path path(directory);
-    path /= command;
-    if(std::filesystem::exists(path)) {
-      return path.string();
-    }
-  }
-  return std::nullopt;
+std::vector<std::string> get_paths(std::string& path) {
+  return split(path, ':');
 }
-std::optional<std::string> buildPath(const std::string& arg, std::string currentPath, const std::string& HOME_PATH) {
-  std::vector<std::string> pathDirectories;
-  split(arg, pathDirectories, '/');
-  if(arg.front() == '/') {
-    currentPath = "/";
-  }
-  for(const auto& directory : pathDirectories) {
-    if(directory == "." || directory == "") {
+std::string normalize_quoted(std::string& input) {
+  std::string result;
+  bool has_single_quote = false;
+  bool has_double_quote = false;
+  bool after_backslash = false;
+  for (auto& ch : input) {
+    if (after_backslash) {
+      result += ch;
+      after_backslash = false;
       continue;
     }
-    else if(directory == "~") {
-      currentPath = std::filesystem::path(HOME_PATH).string();
-    }
-    else if(directory == "..") {
-      currentPath = std::filesystem::path(currentPath).parent_path();
-    }
-    else {
-      std::filesystem::path path(currentPath);
-      path /= directory;
-      if(std::filesystem::exists(path)) {
-        currentPath = path.string();
+    if (has_single_quote) {
+      if (ch == '\'') {
+        has_single_quote = false;
+      } else {
+        result += ch;
       }
-      else {
-       return std::nullopt; 
-      }
-    }
-    }
-  return currentPath;
-}
-void handleSpecialCharsOutsideQuotes(std::string& s) {
-  int posLastSeenQuote = -1;
-  for(size_t i = 0; i + 1 < s.size(); ++i) {
-    if(s[i] == '\"') {
-      posLastSeenQuote *= -1;
-    }
-    else if(s[i] == '\\' && posLastSeenQuote == -1) {
-      s.erase(i, 1);
-    }
-  }
-}
-std::string parseInputWithoutLiterals(const std::string& input) {
-    std::istringstream iss(input);
-    std::string token, parsedInput;
-    while(iss >> token) {
-      parsedInput += token + ' ';
-    }
-    parsedInput.pop_back();
-    handleSpecialCharsOutsideQuotes(parsedInput);
-    return parsedInput;
-}
-void handleSpecialChars(std::string& s) {
-  for(size_t i = 0; i + 1 < s.size(); ++i) {
-    if(s[i] == '\\' && (s[i + 1] == '\\' || s[i + 1] == '$' || s[i + 1] == '\"')) {
-      s.erase(i, 1);
-    }
-  }
-}
-bool checkLiteral(const std::string& input, int pos, const char literal) {
-  return input[pos] == literal &&
-    (pos == 0 || input[pos - 1] != '\\' || (pos > 1 && input[pos - 1] == '\\' && input[pos - 2] == '\\'));
-}
-bool checkIfLiteralsExist(const std::string& args) {
-  for(size_t i = 1; i < args.size(); ++i) {
-    if(checkLiteral(args, i, '\"') || checkLiteral(args, i, '\'')) {
-      return true;
-    }
-  }
-  return false;
-}
-std::string parseInputWithLiterals(const std::string& input) {
-  std::string newInput;
-  size_t i = 0, j;
-  while(i < input.size()) {
-    if(checkLiteral(input, i, '\'')) {
-      j = i + 1;
-      while(j < input.size() && !checkLiteral(input, j, '\'')) {
-        ++j;
-      }
-      if(j < input.size() + 1) {
-        std::string literal = input.substr(i + 1, j - i - 1);
-        newInput += literal;
-      }
-      i = j + 1;
-      if(i < input.size() && input[i] != '\'') {
-        newInput += ' ';
-      }
-    }
-    else if(checkLiteral(input, i, '\"')) {
-      j = i + 1;
-      while(j < input.size() && !checkLiteral(input, j, '\"')) {
-        ++j;
-      }
-      if(j < input.size() + 1) {
-        std::string literal = input.substr(i + 1, j - i - 1);
-        handleSpecialChars(literal);
-        newInput += literal;
-      }
-      i = j + 1;
-      if(i < input.size() && input[i] != '\"') {
-        newInput += ' ';
-      }
-    }
-    else {
-      ++i;
-    }
-  }
-  if(j < input.size()) {
-    if(newInput.back() == ' ') newInput.pop_back();
-    std::string strToAdd = input.substr(j + 1);
-    handleSpecialChars(strToAdd);
-    newInput += strToAdd;
-  }
-  return newInput;
-}
-void enableRawMode() {
-  termios term;
-  tcgetattr(STDIN_FILENO, &term);
-  term.c_lflag &= ~(ICANON | ECHO);
-  tcsetattr(STDIN_FILENO, TCSANOW, &term);
-}
-void disableRawMode() {
-  termios term;
-  tcgetattr(STDIN_FILENO, &term);
-  term.c_lflag |= (ICANON | ECHO);
-  tcsetattr(STDIN_FILENO, TCSANOW, &term);
-}
-void handleTabPress(std::string& input) {
-  if(input == "ech") {
-    input = "echo ";
-    std::cout << "o ";
-  }
-  else if(input == "exi") {
-    input = "exit ";
-    std::cout << "t ";
-  }
-  else {
-    //
-  }
-}
-void readInputWithTabSupport(std::string& input) {
-  enableRawMode();
-  char c;
-  while (true) {
-    c = getchar();
-    if (c == '\n') {
-      std::cout << std::endl;
-      break;
-    } else if (c == '\t') {
-      handleTabPress(input);
-    } else if (c == 127) {
-      if (!input.empty()) {
-        input.pop_back();
-        std::cout << "\b \b"; // Move cursor back, overwrite character with space, move cursor back again.
+    } else if (has_double_quote) {
+      if (ch == '\"') {
+        has_double_quote = false;
+      } else if (ch == '\\') {
+        after_backslash = true;
+      } else {
+        result += ch;
       }
     } else {
-      input += c;
-      std::cout << c;
+      if (ch == ' ' && result.back() == ' ') {
+        continue;
+      } else if (ch == '\\') {
+        after_backslash = true;
+      } else if (ch == '\'') {
+        has_single_quote = true;
+      } else if (ch == '\"') {
+        has_double_quote = true;
+      } else {
+        result += ch;
+      }
     }
   }
-  disableRawMode();
+  return result;
 }
-int main() {
-  // Flush after every std::cout / std:cerr
-  std::cout << std::unitbuf;
-  std::cerr << std::unitbuf;
-  std::string currentPath = std::filesystem::current_path();
-  const std::string HOME_PATH = std::getenv("HOME");
-  std::vector<std::string> pathDirectories;
-  split(std::getenv("PATH"), pathDirectories, ':');
-  while(true) {
-    std::cout << "$ ";
-    std::string input;
-    readInputWithTabSupport(input);
-    // std::getline(std::cin, input);
-    bool redirect = false, redirectError = false, append = false;
-    std::string redirectPath = "";
-    if(auto it = input.find('>'); it != std::string::npos) {
-      if(it + 1 < input.size() && input[it + 1] == '>') {
-        append = true;
-        ++it;
+std::string normalize_path(std::string& path) {
+  auto path_items = split(path, '/');
+  std::vector<std::string> result;
+  for (auto& path_item : path_items) {
+    if (path_item == "") {
+      continue;
+    } else if (path_item == ".") {
+      continue;
+    } else if (path_item == "..") {
+      if (!result.empty()) {
+        result.pop_back();
       }
-      redirectPath = input.substr(it + 2, input.size() - it - 2);
-      if(append) --it;
-      input = input.substr(0, it);
-      if(input.back() == '1') {
-        input.pop_back();
-        redirect = true;
-      }
-      else if(input.back() == '2') {
-        input.pop_back();
-        redirectError = true;
-      }
-      else {
-        redirect = true;
-      }
-      input.pop_back();
+    } else {
+      result.push_back(path_item);
     }
-    std::vector<std::string> tokens;
-    split(input, tokens, ' ');
-    if(tokens.empty()) continue;
-    std::string args = std::accumulate(tokens.begin() + 1, tokens.end(), std::string(),
-      [](const std::string& a, const std::string& b) {
-        return a + (a.length() > 0 ? " " : "") + b;
-      });
-    std::string redirectionSpecifier = "";
-    if(redirect) redirectionSpecifier += " 1>";
-    else if(redirectError) redirectionSpecifier += " 2>";
-    if(append) redirectionSpecifier += ">";
-    redirectionSpecifier += " ";
-    if(tokens.front() == "cat") {
-      std::string command = tokens.front() + ' ' + args;
-      command += redirectionSpecifier + redirectPath;
-      std::system(command.c_str());
+  }
+  std::string result_path;
+  for (auto& path_item : result) {
+    result_path += "/";
+    result_path += path_item;
+  }
+  return result_path;
+}
+void handle_echo(std::string& input) {
+  auto arg = input.substr(CMD_ECHO.size() + 1);
+  size_t redirect_pos = arg.find('>');
+  if (redirect_pos != std::string::npos) {
+    if (arg[redirect_pos-1] == '1' && arg[redirect_pos+1] == '>') {
+      std::string path = arg.substr(redirect_pos+3);
+      std::fstream file(path, std::ios::app);
+      if (arg[redirect_pos-1] == '1') {
+        redirect_pos--;
+      }
+      std::string raw = arg.substr(0, redirect_pos);
+      file << normalize_quoted(raw) << std::endl;
+      file.close();
+    } else if (arg[redirect_pos-1] == '2') {
+      std::string path = arg.substr(redirect_pos+2);
+      std::fstream file(path, std::ios::out);
+      std::string raw = arg.substr(0, redirect_pos-1);
+      std::cout << normalize_quoted(raw) << std::endl;
+      file.close();
+    } else {
+      std::string path = arg.substr(redirect_pos+2);
+      std::fstream file(path, std::ios::out);
+      if (arg[redirect_pos-1] == '1') {
+        redirect_pos--;
+      }
+      std::string raw = arg.substr(0, redirect_pos);
+      file << normalize_quoted(raw) << std::endl;
+      file.close();
     }
-    else if(tokens.front() == "cd") {
-      auto newPath = buildPath(tokens[1], currentPath, HOME_PATH);
-      if(newPath.has_value()) {
-        currentPath = newPath.value();
-      }
-      else {
-        std::cout << "cd: " << tokens[1] <<  ": No such file or directory" << std::endl;
-      }
+  } else {
+    std::cout << normalize_quoted(arg) << std::endl;
+  }
+}
+void handle_type(std::string& input, std::vector<std::string>& paths) {
+  auto cmd = input.substr(CMD_TYPE.size() + 1);
+  if (AVAILABLE_COMMANDS.count(cmd)) {
+    std::cout << cmd << " is a shell builtin" << std::endl;
+    return;
+  }
+  for (auto& path : paths) {
+    std::string full_cmd_path = path + "/" + cmd;
+    if (std::filesystem::exists(full_cmd_path)) {
+      std::cout << cmd << " is " << full_cmd_path << std::endl;
+      return;
     }
-    else if(tokens.front() == "echo") {
-      std::string command;
-      if(checkIfLiteralsExist(input)) {
-        command = parseInputWithLiterals(input.substr(5));
+  }
+  std::cout << cmd << ": not found" << std::endl;
+}
+void handle_pwd() {
+  std::cout << WORKING_DIR << std::endl;
+}
+void handle_cd(std::string& input) {
+  auto path = input.substr(CMD_CD.size() + 1);
+  if (path.starts_with("/")) {
+    if (!std::filesystem::exists(path)){
+      std::cout << "cd: " << path << ": No such file or directory" << std::endl;
+      return;
+    }
+    WORKING_DIR = path;
+  } else if (path == "~") {
+    std::string home_path;
+    if (const char* env_p = std::getenv("HOME")) {
+      home_path = env_p;
+    }
+    WORKING_DIR = home_path;
+  } else {
+    auto temp_working_dir = WORKING_DIR + "/" + path;
+    WORKING_DIR = normalize_path(temp_working_dir);
+  }
+}
+void handle_run(std::string& cmd_line, std::vector<std::string>& paths) {
+  auto args = split(cmd_line, ' ');
+  std::string cmd = args[0];
+  if (cmd.front() == '\'' ) {
+    size_t end_pos = cmd_line.find('\'', 1);
+    cmd = cmd_line.substr(1, end_pos - 1);
+  }
+  if (cmd.front() == '\"' ) {
+    size_t end_pos = cmd_line.find('\"', 1);
+    cmd = cmd_line.substr(1, end_pos - 1);
+  }
+  for (auto& path : paths) {
+    std::string full_cmd_path = path + "/" + cmd;
+    if (std::filesystem::exists(full_cmd_path)) {
+      system(cmd_line.c_str());
+      return;
+    }
+  }
+  std::cout << cmd << ": not found" << std::endl;
+}
+std::string find_common_prefix(const std::set<std::string>& matches) {
+    if (matches.empty()) return "";
+    if (matches.size() == 1) return *matches.begin();
+    const std::string& first = *matches.begin();
+    size_t min_len = first.length();
+    for (const auto& str : matches) {
+        min_len = std::min(min_len, str.length());
+    }
+    
+    std::string result;
+    for (size_t i = 0; i < min_len; i++) {
+        char current = first[i];
+        for (const auto& str : matches) {
+            if (str[i] != current) {
+                return result;
+            }
+        }
+        result += current;
+    }
+    
+    return result;
+}
+std::string get_input_with_completion(const std::vector<std::string>& paths) {
+  std::string input;
+  char c;
+  struct termios old_settings, new_settings;
+  tcgetattr(STDIN_FILENO, &old_settings);
+  new_settings = old_settings;
+  new_settings.c_lflag &= ~(ICANON | ECHO);
+  tcsetattr(STDIN_FILENO, TCSANOW, &new_settings);
+  std::cout << "$ ";
+  bool is_tab_once = false;
+  while (true) {
+    c = getchar();
+    // TAB
+    if (c == '\t') {
+      std::set<std::string> matches;
+      if (CMD_ECHO.starts_with(input)) {
+        matches.insert(CMD_ECHO);
       }
-      else {
-        command = parseInputWithoutLiterals(input).substr(5);
+      if (CMD_EXIT.starts_with(input)) {
+        matches.insert(CMD_EXIT);
       }
-      if(redirect) {
-        std::filesystem::path newFilePath{redirectPath};
-        std::ofstream file(newFilePath, (append ? std::ios_base::app : std::ios_base::out));
-        if(file) {
-          file << command << std::endl;
+      if (matches.size() == 1) {
+        while (!input.empty()) {
+            std::cout << "\b \b";
+            input.pop_back();
+        }
+        input = *matches.begin();
+        input += " ";
+        std::cout << input;
+        continue;
+      }
+      for (const auto& path : paths) {
+        if (!std::filesystem::exists(path)) continue;
+        for (const auto& entry : std::filesystem::directory_iterator(path)) {
+            std::string filename = entry.path().filename().string();
+            if (filename.starts_with(input)) {
+              matches.insert(filename);
+            }
         }
       }
-      else if(redirectError) {
-        std::filesystem::path newFilePath{redirectPath};
-        std::ofstream file(newFilePath, (append ? std::ios_base::app : std::ios_base::out));
-        std::cout << command << std::endl;
+      if (matches.size() == 0) {
+        std::cout << '\a';
+      } else if (matches.size() == 1) {
+        while (!input.empty()) {
+            std::cout << "\b \b";
+            input.pop_back();
+        }
+        input = *matches.begin();
+        input += " ";
+        std::cout << input;
+      } else if (matches.size() > 1 && !is_tab_once) {
+        std::string common = find_common_prefix(matches);
+        if (common.length() > input.length()) {
+            while (!input.empty()) {
+                std::cout << "\b \b";
+                input.pop_back();
+            }
+            input = common;
+            std::cout << input;
+        } else {
+            is_tab_once = true;
+            std::cout << '\a';
+        }
+      } else if (matches.size() > 1 && is_tab_once) {
+        std::cout << "\n";
+        for (const auto& match : matches) {
+            std::cout << match << "  ";
+        }
+        std::cout << "\n$ " << input;
       }
-      else {
-        std::cout << command << std::endl;
+    // ENTER
+    } else if (c == '\n') {
+      std::cout << std::endl;
+      break;
+    // BACKSPACE
+    } else if (c == 127 || c == '\b') {
+      if (!input.empty()) {
+          input.pop_back();
+          std::cout << "\b \b";
       }
-    }
-    else if(tokens.front() == "exit" && tokens[1] == "0") {
-      return 0;
-    }
-    else if(tokens.front() == "ls") {
-      std::string command = tokens.front() + ' ' + args;
-      command += redirectionSpecifier + redirectPath;
-      std::system(command.c_str());
-    }
-    else if(tokens.front() == "pwd") {
-      std::cout << currentPath << std::endl;
-    }
-    else if(tokens.front() == "type") {
-      std::string commandToType = tokens[1];
-      if(commands.find(commandToType) != commands.end())
-        std::cout << commandToType << " is a shell builtin" << std::endl;
-      else if(auto path = findInPath(pathDirectories, commandToType); path.has_value())
-        std::cout << path.value() << std::endl;
-      else
-        std::cout << commandToType << ": not found" << std::endl;
-    }
-    else if(input.front() == '\'') {
-      size_t lastSingleQuote = input.find_last_of('\'');
-        std::string filepath = input.substr(lastSingleQuote + 2);
-        std::system(("cat " + filepath).c_str());
-    }
-    else if(input.front() == '\"') {
-      size_t lastSingleQuote = input.find_last_of('\"');
-        std::string filepath = input.substr(lastSingleQuote + 2);
-        std::system(("cat " + filepath).c_str());
-    }
-    else if(auto commandPath = findInPath(pathDirectories, tokens.front()); commandPath.has_value()) {
-      std::system((tokens.front() + ' ' + args).c_str());
-    }
-    else {
-      std::cout << tokens.front() << ": command not found" << std::endl;
+    // DEFAULT
+    } else {
+        input += c;
+        std::cout << c;
     }
   }
-  return 0;
+  tcsetattr(STDIN_FILENO, TCSANOW, &old_settings);
+  return input;
+}
+int main() {
+  std::cout << std::unitbuf;
+  std::cerr << std::unitbuf;
+  WORKING_DIR = std::filesystem::current_path().string();
+  std::vector<std::string> paths;
+  if (const char* env_p = std::getenv("PATH")) {
+      std::string path = env_p;
+      paths = get_paths(path);
+  }
+  while (true) {
+    std::string input = get_input_with_completion(paths);
+    if (input == "exit 0") {
+      break;
+    } else if (input.starts_with(CMD_ECHO)) {
+      handle_echo(input);
+    } else if (input.starts_with(CMD_TYPE)) {
+      handle_type(input, paths);
+    } else if (input.starts_with(CMD_PWD)) {
+      handle_pwd();
+    } else if (input.starts_with(CMD_CD)) {
+      handle_cd(input);
+    } else {
+      handle_run(input, paths);
+    }
+  }
+  return EXIT_SUCCESS;
 }
